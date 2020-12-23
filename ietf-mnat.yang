@@ -4,10 +4,6 @@ module ietf-mnat {
   namespace "urn:ietf:params:xml:ns:yang:ietf-mnat";
   prefix mnat;
 
-  import ietf-yang-types {
-    prefix yang;
-  }
-
   import ietf-inet-types {
     prefix inet;
     reference
@@ -15,8 +11,8 @@ module ietf-mnat {
   }
 
   import ietf-routing-types {
-      prefix "rt-types";
-      reference "RFC 8294";
+    prefix "rt-types";
+    reference "RFC 8294";
   }
 
   organization
@@ -77,7 +73,22 @@ module ietf-mnat {
     }
   }
 
-  typedef egress-key {
+  grouping monitor-definition {
+    choice monitor-type {
+      description
+        "Definition of monitor characteristics.";
+      case monitor-global-sources {
+        leaf global-source-prefix {
+          type inet:ip-prefix;
+          mandatory true;
+          description
+            "Prefix to match for source IPs.";
+        }
+      }
+    }
+  }
+
+  typedef watcher-key {
     type string;
     description
       "A key for egress identification.";
@@ -116,63 +127,135 @@ module ietf-mnat {
        local-mapping.";
   }
 
+  container egress-global-joined {
+    description
+      "Declarations of subscriptions to global (S,G)s per
+       egress.";
+
+    list watcher {
+      key "id";
+      description
+        "Mappings of traffic that correspond to the registered
+         interest list for a given watch id (from the
+         get-new-watcher-id rpc)";
+      leaf id {
+        type watcher-key;
+        description
+          "Identifier from get-new-watcher-id.  Tracks assignments
+           of interest to the specific watcher.";
+      }
+      list joined-sg {
+        key "id";
+        leaf id {
+          type string;
+          description
+            "id of the joined (S,G)";
+        }
+        description
+          "(S,G)s in the global address space that an egress is
+           joined to.  These should get corresponding entries in
+           the assigned-channels lists.";
+        uses multicast-channel;
+      }
+    }
+  }
+  container ingress-watching {
+    description
+      "Matches on (S,G)s that get ingested from this ingress.";
+
+    list watcher {
+      key "id";
+      description
+        "Mappings of traffic that correspond to the registered
+         interest list for a given watch id (from the
+         get-new-watcher-id rpc)";
+      leaf id {
+        type watcher-key;
+        description
+          "Identifier from get-new-watcher-id.  Tracks assignments
+           of interest to the specific watcher.";
+      }
+      list monitor {
+        key "id";
+        leaf id {
+          type string;
+          description
+            "id of the monitor definition";
+        }
+        uses monitor-definition;
+      }
+    }
+  }
   container assigned-channels {
     config false;
     description
       "MNAT mappings of global (S,G)s into a local transport.";
 
-    list mapped-sg {
+    list watcher {
       key "id";
       description
-        "The local network's assignment of global channels to
-         local transport characteristics.";
-
+        "Mappings of traffic that correspond to the registered
+         interest list for a given watch id (from the
+         get-new-watcher-id rpc)";
       leaf id {
-        type assignment-id;
-        mandatory true;
+        type watcher-key;
         description
-          "Identifier for this assignment.";
+          "Identifier from get-new-watcher-id.  Tracks assignments
+           of interest to the specific watcher.";
       }
-      leaf state {
-        type assignment-state;
-        mandatory true;
+      list mapped-sg {
+        key "id";
         description
-          "Status of the global (S,G)s that are assigned in the
-           local network.";
-      }
-      container global-subscription {
-        description
-          "The global channel that's mapped.";
-        uses multicast-channel;
-      }
-      container local-mapping {
-        choice mapping-type {
-          description
-            "The description of how the global channel is
-             transported within the local network";
+          "The local network's assignment of global channels to
+           local transport characteristics.";
 
-          case local-multicast-mapping {
+        leaf id {
+          type assignment-id;
+          mandatory true;
+          description
+            "Identifier for this assignment.";
+        }
+        leaf state {
+          type assignment-state;
+          mandatory true;
+          description
+            "Status of the global (S,G)s that are assigned in the
+             local network.";
+        }
+        container global-subscription {
+          description
+            "The global channel that's mapped.";
+          uses multicast-channel;
+        }
+        container local-mapping {
+          choice mapping-type {
             description
-              "Defines the use of a local multicast (S,G) or
-               (*,G).";
-            uses multicast-channel;
+              "The description of how the global channel is
+               transported within the local network";
+
+            case local-multicast-mapping {
+              description
+                "Defines the use of a local multicast (S,G) or
+                 (*,G).";
+              uses multicast-channel;
+            }
           }
         }
       }
     }
   }
 
-  rpc get-new-egress-key {
+  rpc get-new-watcher-id {
     description
       "Obtain a secret key unique to an individual mnat-egress
        instance, assigned by the server and used for subscription
        management.";
     output {
-      leaf egress-id {
-        type egress-key;
+      leaf watcher-id {
+        type watcher-key;
         mandatory true;
         description
-          "Egress identifier for subscription management.";
+          "Identifier for assignment monitoring.";
       }
       leaf refresh-period {
         type uint16;
@@ -182,52 +265,26 @@ module ietf-mnat {
       }
     }
   }
-  rpc refresh-egress-key {
+  rpc refresh-watcher-id {
     description
       "A secret key unique to an individual mnat-egress instance,
        assigned by the server and used for subscription
        management.";
     input {
-      leaf egress-id {
-        type egress-key;
+      leaf watcher-id {
+        type watcher-key;
         mandatory true;
         description
-          "Egress identifier for subscription management.";
+          "Egress identifier for assignment monitoring.";
       }
     }
-  }
-  rpc join-global {
-    description
-      "An mnat-egress instance calls this RPC to register to the
-       network an interest in a global (S,G).  Depending on
-       popularity and local network decisions, this may result in
-       adding and possibly removing an entry in
-       assigned-channels/mapped-sg.";
-    input {
-      leaf egress-id {
-        type egress-key;
-        mandatory true;
+    output {
+      leaf refresh-period {
+        type uint16;
+        default 10;
         description
-          "Egress identifier.";
+          "Number of seconds to wait between refresh messages.";
       }
-      uses multicast-channel;
-    }
-  }
-  rpc leave-global {
-    description
-      "An mnat-egress instance calls this RPC to register to the
-       network an interest in a global (S,G).  Depending on
-       popularity and local network decisions, this may result in
-       adding and possibly removing an entry in
-       assigned-channels/mapped-sg.";
-    input {
-      leaf egress-id {
-        type egress-key;
-        mandatory true;
-        description
-          "Egress identifier.";
-      }
-      uses multicast-channel;
     }
   }
 }

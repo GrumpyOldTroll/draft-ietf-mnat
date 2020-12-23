@@ -1,8 +1,8 @@
 ---
 title: Multicast Network Address Translation
 abbrev: MNAT
-docname: draft-jholland-mboned-mnat-00
-date: 2020-10-31
+docname: draft-jholland-mboned-mnat-01
+date: 2020-12-23
 category: std
 
 ipr: trust200902
@@ -24,6 +24,7 @@ author:
     email: jakeholland.net@gmail.com
 
 normative:
+  RFC1112:
   RFC2119:
   RFC3810:
   RFC3376:
@@ -45,6 +46,13 @@ informative:
   RFC6335:
   RFC7761:
   RFC8815:
+  IEEE-802.1Q:
+    title: "Local and Metropolitan Area Networks -- Media Access Control (MAC) Bridges and Virtual Bridged Local Area Networks"
+    author:
+      - org: IEEE
+    seriesinfo:
+      "IEEE": Std 802.1Q
+    target: https://standards.ieee.org/findstds/standard/802.1Q-2011.html
 
 --- abstract
 
@@ -59,7 +67,7 @@ Network Address Translation is very widely used for unicast traffic in a variety
 {{RFC2663}} is recommended reading for background on the ways unicast NAT is used.
 
 The handling of multicast traffic can pose a variety of additional problems for a network, some of which can be mitigated or avoided if traffic can be mapped to a different address space than its original addressing.
-This document defines a new service, Multicast Network Address Translation (MNAT), as a mechanism to administer network address mappings for multicast traffic within a network, for the purpose of working around various addressing-related issues.
+This document defines a new service, Multicast Network Address Translation (MNAT) as a mechanism to administer network address mappings for multicast traffic within a network, for the purpose of working around various addressing-related issues.
 An overview of some of the motivating use cases that require network address remapping for multicast traffic is given in {{motivation}}.
 An explanation of the protocol operation is given in {{protocol}}.
 
@@ -92,10 +100,11 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 This section lists use cases where a global (S,G) may not be possible to transport within a network, requiring the use of some kind of encapsulation or address translation in order to adequately communicate the group membership for packet replication within the network, or in order to perform the forwarding for the subscribed traffic within the network.
 
- * Global IPv6 (S,G)s subscribed from within an IPv4-only network, or global IPv4 (S,G)s subscribed from within an IPv6-only network.
- * Networks with legacy devices that support only IGMPv2 or MLDv1, or otherwise do not support SSM and cannot discover the external sources without the use of non-standard services since interdomain any-source multicast has been deprecated (see {{RFC8815}}).
- * Networks that ingest external multicast traffic in a way that the route to the source of the traffic does not go through the ingest point may need to use a different source so that the Reverse Path Forwarding (RPF) can find the correct network location for the ingest.
- * Networks that provision multicast transport and packet replication channels with static routing instead of dynamic tree-building protocols like PIM-SM {{RFC7761}}.
+ 1. Global IPv6 (S,G)s subscribed from within an IPv4-only network, or global IPv4 (S,G)s subscribed from within an IPv6-only network.
+ 2. Networks with legacy devices that support only IGMPv2 or MLDv1, or otherwise do not support SSM and cannot discover the external sources without the use of non-standard services since interdomain any-source multicast has been deprecated (see {{RFC8815}}).
+ 3. Networks that ingest external multicast traffic in a way that the route to the source of the traffic does not go through the ingest point may need to use a different source so that the Reverse Path Forwarding (RPF) can find the correct network location for the ingest.
+ 4. Networks that provision multicast transport and packet replication channels with static routing instead of dynamic tree-building protocols like PIM-SM {{RFC7761}}.
+ 5. Networks using VLAN {{IEEE-802.1Q}} for traffic segregation and has Layer 2 access devices that assign VLAN tags according to MAC addresses will get MAC address collisions among multicast groups.  Because the bits used for the multicast addresses come from the bottom 23 bits of the destination group address as described in {{RFC1112}}, and those bits can collide between groups, especially in SSM.  This breaks the traffic segregation in such devices.
 
 A note elaborating on the use of static routing for multicast groups:
 
@@ -122,6 +131,14 @@ Substantial discussion of this document should take place on the MBONED working 
 
  * Join: https://www.ietf.org/mailman/listinfo/mboned
  * Search: https://mailarchive.ietf.org/arch/browse/mboned/
+
+### Implementation status
+
+There is an implementation prototype (MIT-licensed) at:
+
+https://github.com/GrumpyOldTroll/mnat
+
+Pull requests, comments, testing and deployment reports, etc. are very welcome.  Contributors before RFC publication will be credited in this document unless requested otherwise.
 
 # Protocol Operation {#protocol}
 
@@ -165,8 +182,9 @@ For a bump in the host egress node, the discovery of the MNAT service might eith
 
 ## Service Discovery
 
-It is RECOMMENDED that a network operating an MNAT service provide service discovery with the use of DNS-SD {{RFC6763}}.
-However, a network MAY use other mechanisms, including options such as manual configuration.
+It is RECOMMENDED that egress devices in end-user operating systems or applications use DNS-SD {{RFC6763}} by default to discover an MNAT service within their containing networks.
+However, a network may require the use of other mechanisms, including options such as manual configuration, so implementors are advised to offer manual configuration options in addition.
+
 As long as an MNAT client can find a valid hostname to use, it can connect to the given MNAT service and monitor changes to the address assignments within the network.
 
 ### Detecting Invalid Services
@@ -189,13 +207,17 @@ Where clients or servers do not support server push updates, long polling can be
 If long polling and server push are both unavailable, MNAT clients may need to poll the server to monitor updates instead.
 This approach is likely to encounter delays in the detection of changes to mapping decisions within the MNAT service, but can be used as a last resort for providing multicast connectivity.
 
-### Egress Keys
+### Watcher Keys
 
-Egress nodes open a persistent connection to the MNAT service and request allocation of an egress key with the get-new-egress-key rpc.
-Egress keys are identifiers chosen by the MNAT service and communicated to egress nodes in the response to a successful get-new-egress-key rpc.
-Egress keys SHOULD be based on a random value and unique per new key requested.
+MNAT clients open a persistent connection to the MNAT service and request allocation of a watcher key with the get-new-watcher-key rpc.
+Watcher keys are identifiers chosen by the MNAT service and communicated to client nodes in the response to a successful get-new-egress-key rpc.
+Watcher keys SHOULD be based on a random value and unique per new key requested.
 
-Egress nodes provide their egress key when performing group management functions (join and leave operations).
+Egress nodes communicate an interest in global (S,G)s by posting updates to the egress-global-joined container under a watcher with id equal to their watcher-key.
+
+Ingress nodes communicate an interest in sets of global (S,G)s by providing a monitor object with a matching filter under a watcher with id equal to their watcher-key.
+
+Watcher-keys expire if the refresh-watcher-id rpc is not invoked within the refresh-period given in the response to the get-new-watcher-id rpc.
 
 TBD: better explanation about how the service times out egress nodes that don't refresh their egress key on schedule, and how egress nodes that reconnect can attempt to refresh the prior key they were using, but must request a new one on error.
 Probably define a state per egress key (e.g. active vs. recently expired vs. non-existant) for the MNAT service to maintain.
@@ -204,7 +226,7 @@ Probably reference CBACC in that explanation (I-D.draft-ietf-mboned-cbacc).
 
 ### Egress Group Management
 
-The join-global and leave-global RPCs in the YANG model provide a mechanism for egress nodes to directly advertise their group membership to the MNAT service for externally addressed (S,G)s.
+The egress-global-joined container in the YANG model provides a mechanism for egress nodes to directly advertise their group membership to the MNAT service for externally addressed (S,G)s.
 
 Egress nodes advertise their group membership to external (S,G)s to the MNAT service and also advertise group membership to their next-hop router using IGMP or MLD for the locally mapped addressing withing the network.
 Joins and leaves for the locally mapped network addresses occur in response to downstream joins for an external (S,G) that has or gains a mapping according to the MNAT service, when the join or leave propagates to the egress node.
